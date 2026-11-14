@@ -1229,6 +1229,10 @@ button {
   border-right: 4px solid #efe7d8;
 }
 
+.fret-cell.is-behind-capo {
+  opacity: 0.38;
+}
+
 .fret-cell:hover {
   background: rgba(255, 255, 255, 0.06);
 }

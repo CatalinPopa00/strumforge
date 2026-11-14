@@ -43,8 +43,13 @@ def _build_chord_templates() -> list[ChordTemplate]:
             for interval, weight in intervals.items():
                 vec[(root_idx + interval) % 12] = weight
             vec /= np.linalg.norm(vec) + 1e-8
-            # Slight penalty for 4-note/sus chords unless evidence is strong
-            penalty = 0.0 if quality in ("", "m") else 0.035
+            # Penalize extensions: maj7/sus slightly higher due to 3rd-harmonic overtones on guitar triads
+            if quality in ("", "m"):
+                penalty = 0.0
+            elif quality in ("7", "m7"):
+                penalty = 0.048
+            else:
+                penalty = 0.075
             templates.append(
                 ChordTemplate(
                     name=f"{root_name}{quality}",
@@ -91,12 +96,18 @@ def decode_audio_with_ffmpeg(audio_bytes: bytes, sample_rate: int = 22050, max_s
     return samples
 
 
-def _build_chroma_filterbank(sample_rate: int, n_fft: int, tuning_semitones: float = 0.0) -> np.ndarray:
-    """Map FFT magnitude bins (80 Hz - 1600 Hz) to 12 pitch classes."""
+def _build_chroma_filterbank(
+    sample_rate: int,
+    n_fft: int,
+    tuning_semitones: float = 0.0,
+    min_freq: float = 75.0,
+    max_freq: float = 1800.0,
+) -> np.ndarray:
+    """Map FFT magnitude bins to 12 pitch classes."""
     freqs = np.fft.rfftfreq(n_fft, d=1.0 / sample_rate)
     fb = np.zeros((12, len(freqs)), dtype=np.float32)
 
-    valid = (freqs >= 75.0) & (freqs <= 1800.0)
+    valid = (freqs >= min_freq) & (freqs <= max_freq)
     valid_idx = np.where(valid)[0]
     valid_freqs = freqs[valid_idx]
 
@@ -104,8 +115,9 @@ def _build_chroma_filterbank(sample_rate: int, n_fft: int, tuning_semitones: flo
     midi = 69.0 + 12.0 * np.log2(valid_freqs / 440.0) - tuning_semitones
     pitch_class = np.mod(midi, 12.0)
 
-    # Weight mid-guitar frequencies higher
-    freq_weight = np.exp(-0.5 * ((np.log2(valid_freqs / 280.0)) / 1.45) ** 2)
+    # Weight mid-guitar frequencies higher unless bass-only
+    center_freq = 135.0 if max_freq <= 260.0 else 280.0
+    freq_weight = np.exp(-0.5 * ((np.log2(valid_freqs / center_freq)) / 1.45) ** 2)
 
     for pc in range(12):
         # Circular distance on 12-semitone ring
@@ -212,13 +224,15 @@ def _detect_chords_viterbi(
     frame_times: np.ndarray,
     beats: list[float],
     beat_sec: float,
+    bass_chroma: np.ndarray | None = None,
 ) -> list[dict[str, Any]]:
-    """Run beat-synchronous chord matching with Viterbi smoothing."""
+    """Run beat-synchronous chord matching with Viterbi smoothing and bass-root weighting."""
     if len(beats) < 2:
         beats = [0.0, max(1.0, float(frame_times[-1]))]
 
     # Average chroma per beat interval
     beat_chromas: list[np.ndarray] = []
+    beat_bass: list[np.ndarray] = []
     beat_starts: list[float] = []
     beat_durs: list[float] = []
 
@@ -229,12 +243,18 @@ def _detect_chords_viterbi(
         if not np.any(mask):
             idx = int(np.argmin(np.abs(frame_times - b_start)))
             vec = chroma[:, idx]
+            bvec = bass_chroma[:, idx] if bass_chroma is not None else np.zeros(12, dtype=np.float32)
         else:
             vec = chroma[:, mask].mean(axis=1)
+            bvec = bass_chroma[:, mask].mean(axis=1) if bass_chroma is not None else np.zeros(12, dtype=np.float32)
         norm = np.linalg.norm(vec)
         if norm > 1e-6:
             vec = vec / norm
+        bnorm = np.linalg.norm(bvec)
+        if bnorm > 1e-6:
+            bvec = bvec / bnorm
         beat_chromas.append(vec)
+        beat_bass.append(bvec)
         beat_starts.append(float(b_start))
         beat_durs.append(max(0.15, float(b_end - b_start)))
 
@@ -242,10 +262,14 @@ def _detect_chords_viterbi(
     n_chords = len(CHORD_TEMPLATES)
     template_mat = np.stack([t.vector for t in CHORD_TEMPLATES], axis=0)  # (C, 12)
     penalties = np.array([t.complexity_penalty for t in CHORD_TEMPLATES], dtype=np.float32)
+    root_indices = np.array([NOTE_NAMES.index(t.root) for t in CHORD_TEMPLATES], dtype=np.int32)
 
     beat_mat = np.stack(beat_chromas, axis=0)  # (T, 12)
-    # Cosine similarity minus complexity penalty
-    emissions = beat_mat @ template_mat.T - penalties[None, :]  # (T, C)
+    bass_mat = np.stack(beat_bass, axis=0)     # (T, 12)
+    bass_root_boost = 0.18 * bass_mat[:, root_indices]
+
+    # Cosine similarity + bass root evidence minus complexity penalty
+    emissions = beat_mat @ template_mat.T + bass_root_boost - penalties[None, :]  # (T, C)
 
     # Viterbi decoding: encourage chords to stay stable over 2-4 beats
     stay_bonus = 0.22
@@ -378,7 +402,7 @@ def analyze_audio_bytes(audio_bytes: bytes, title: str = "Piesă analizată") ->
     samples = decode_audio_with_ffmpeg(audio_bytes, sample_rate=sample_rate)
     duration = float(len(samples)) / sample_rate
 
-    n_fft = 4096
+    n_fft = 8192
     hop_length = 512
     noverlap = n_fft - hop_length
     freqs, frame_times, zxx = stft(
@@ -393,14 +417,16 @@ def analyze_audio_bytes(audio_bytes: bytes, title: str = "Piesă analizată") ->
 
     tuning = _estimate_tuning(mag_spec, sample_rate, n_fft)
     fb = _build_chroma_filterbank(sample_rate, n_fft, tuning_semitones=tuning)
+    fb_bass = _build_chroma_filterbank(sample_rate, n_fft, tuning_semitones=tuning, min_freq=75.0, max_freq=220.0)
     chroma = fb @ mag_spec
+    bass_chroma = fb_bass @ mag_spec
 
     bpm, first_beat, beats, hi_onset = _estimate_bpm_and_beats(mag_spec, freqs, frame_rate, duration)
     beat_sec = 60.0 / bpm
     beats_per_bar = 4
     time_signature = "4/4"
 
-    chord_events = _detect_chords_viterbi(chroma, frame_times, beats, beat_sec)
+    chord_events = _detect_chords_viterbi(chroma, frame_times, beats, beat_sec, bass_chroma=bass_chroma)
     key = _estimate_key(chroma)
     strumming = _infer_strumming_pattern(hi_onset, frame_rate, beats, beats_per_bar)
     waveform = _extract_waveform_peaks(samples)

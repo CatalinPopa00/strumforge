@@ -67,6 +67,10 @@ const OPEN_VOICINGS: Record<string, Omit<ChordVoicing, 'name'>> = {
   Bm: { frets: [-1, 2, 4, 4, 3, 2], fingers: [0, 1, 3, 4, 2, 1], baseFret: 2, barre: { fret: 2, fromString: 1, toString: 5 } },
   B7: { frets: [-1, 2, 1, 2, 0, 2], fingers: [0, 2, 1, 3, 0, 4], baseFret: 1 },
   Bm7: { frets: [-1, 2, 4, 2, 3, 2], fingers: [0, 1, 3, 1, 2, 1], baseFret: 2, barre: { fret: 2, fromString: 1, toString: 5 } },
+  'D/F#': { frets: [2, -1, 0, 2, 3, 2], fingers: [1, 0, 0, 2, 4, 3], baseFret: 1 },
+  'G/B': { frets: [-1, 2, 0, 0, 3, 3], fingers: [0, 1, 0, 0, 3, 4], baseFret: 1 },
+  'C/G': { frets: [3, 3, 2, 0, 1, 0], fingers: [3, 4, 2, 0, 1, 0], baseFret: 1 },
+  'Am/G': { frets: [3, 0, 2, 2, 1, 0], fingers: [3, 0, 2, 4, 1, 0], baseFret: 1 },
 };
 
 export function normalizeNote(note: string): string {
@@ -101,6 +105,21 @@ export function transposeChord(chordName: string, semitones: number): string {
 }
 
 export function getChordVoicing(chordName: string): ChordVoicing {
+  const normalizedSlash = chordName
+    .split('/')
+    .map((p, idx) => {
+      if (idx === 0) {
+        const { root, quality } = parseChordName(p);
+        return `${root}${quality}`;
+      }
+      return normalizeNote(p.trim());
+    })
+    .join('/');
+
+  if (OPEN_VOICINGS[normalizedSlash]) {
+    return { name: chordName, ...OPEN_VOICINGS[normalizedSlash] };
+  }
+
   const { root, quality } = parseChordName(chordName);
   const canonical = `${root}${quality}`;
   if (OPEN_VOICINGS[canonical]) {

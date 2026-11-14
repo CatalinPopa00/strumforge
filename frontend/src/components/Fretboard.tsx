@@ -93,11 +93,19 @@ export const Fretboard: React.FC<FretboardProps> = ({ chordName, capo = 0 }) => 
 
                   {/* Fret 0 (Open) + Frets 1..12 */}
                   {Array.from({ length: TOTAL_FRETS + 1 }).map((_, fret) => {
-                    const midi = STANDARD_TUNING_MIDI[sIdx] + fret + capo;
-                    const noteName = midiToNoteName(midi);
-                    const role = getChordNoteRole(chordName, STANDARD_TUNING_MIDI[sIdx] + fret);
-                    const isActiveShapeNote = activeFret === fret;
-                    const shouldHighlight = isActiveShapeNote || (showAllChordTones && role !== null);
+                    const physicalFret = fret;
+                    const effectiveFret = physicalFret - capo;
+                    const soundingMidi = STANDARD_TUNING_MIDI[sIdx] + Math.max(capo, physicalFret);
+                    const noteName = midiToNoteName(soundingMidi);
+                    const behindCapo = capo > 0 && physicalFret < capo;
+
+                    const role =
+                      effectiveFret >= 0
+                        ? getChordNoteRole(chordName, STANDARD_TUNING_MIDI[sIdx] + effectiveFret)
+                        : null;
+                    const isActiveShapeNote = activeFret >= 0 && physicalFret === activeFret + capo;
+                    const shouldHighlight =
+                      !behindCapo && (isActiveShapeNote || (showAllChordTones && role !== null));
                     const isRoot = role === 'R';
                     const showInlayDot = sIdx === 3 && INLAY_FRETS.has(fret);
                     const showDoubleInlay = (sIdx === 4 || sIdx === 1) && fret === 12;
@@ -106,11 +114,11 @@ export const Fretboard: React.FC<FretboardProps> = ({ chordName, capo = 0 }) => 
                       <button
                         key={`cell-${sIdx}-${fret}`}
                         type="button"
-                        onClick={() => audioEngine.pluckMidi(midi)}
+                        onClick={() => audioEngine.pluckMidi(soundingMidi)}
                         title={`Coarda ${STRING_LABELS[sIdx]} · Tasta ${fret} (${noteName})`}
                         className={`fret-cell ${fret === 0 ? 'is-open-nut' : ''} ${
-                          isMuted && fret === 0 ? 'is-muted-string' : ''
-                        }`}
+                          behindCapo ? 'is-behind-capo' : ''
+                        } ${isMuted && fret === 0 ? 'is-muted-string' : ''}`}
                       >
                         <span
                           className="string-wire"

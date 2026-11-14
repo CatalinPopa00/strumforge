@@ -176,6 +176,10 @@ export function App() {
     ? transposeChord(activeChordEvent.chord, transposeSemitones)
     : 'G';
 
+  // With Capo (negative transposeSemitones), the guitarist fingers displayActiveChord but the sounding pitch stays original
+  const soundingActiveChord =
+    transposeSemitones < 0 ? (activeChordEvent?.chord ?? 'G') : displayActiveChord;
+
   const beatsRemaining = useMemo(() => {
     if (!activeChordEvent || !activeSong) return 0;
     const end = activeChordEvent.time + activeChordEvent.duration;
@@ -215,7 +219,7 @@ export function App() {
       audioEngine.playMetronomeClick(activeSlotInBar === 0);
     }
     if (synthEnabled && slotSym !== '-') {
-      audioEngine.strumChord(displayActiveChord, slotSym, 0.85);
+      audioEngine.strumChord(soundingActiveChord, slotSym, 0.85);
     }
   }, [
     isPlaying,
@@ -224,7 +228,7 @@ export function App() {
     activeSlotInBar,
     metronomeEnabled,
     synthEnabled,
-    displayActiveChord,
+    soundingActiveChord,
   ]);
 
   const handleLoadYoutubeUrl = async (e: React.FormEvent) => {
@@ -750,7 +754,11 @@ export function App() {
                   chordName={displayActiveChord}
                   size="lg"
                   highlight
-                  subtitle="ACUM"
+                  subtitle={
+                    transposeSemitones < 0 && activeChordEvent
+                      ? `ACUM · sună ${activeChordEvent.chord}`
+                      : 'ACUM'
+                  }
                 />
 
                 <div className="next-chords-column">
