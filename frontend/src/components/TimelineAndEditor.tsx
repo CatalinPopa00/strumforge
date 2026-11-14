@@ -109,6 +109,23 @@ export const TimelineAndEditor: React.FC<TimelineAndEditorProps> = ({
               Scrie acorduri în paranteze pătrate cu versuri (ex. <code>[G]Mama take this [D]badge</code>) sau simplu pe linii (ex. <code>G D Am7 C</code>).
             </span>
           </div>
+          <div className="groove-presets">
+            {[
+              { label: 'Pop 4-Chord (G D Em C)', text: '[Intro]\nG D Em C\n[Strofa 1]\nG D Em C\n[Refren]\nC G D Em' },
+              { label: 'Baladă Minoră (Am F C G)', text: '[Intro]\nAm F C G\n[Strofa 1]\nAm F C G\n[Refren]\nF G Am C' },
+              { label: 'Rock Clasic (A D E)', text: '[Intro]\nA D E A\n[Strofa 1]\nA D E A\n[Refren]\nD E A A' },
+              { label: 'Blues 12-Bar (E7 A7 B7)', text: '[Strofa 1]\nE7 E7 E7 E7\nA7 A7 E7 E7\nB7 A7 E7 B7' },
+            ].map((tpl) => (
+              <button
+                key={tpl.label}
+                type="button"
+                className="groove-chip"
+                onClick={() => setDraftText(tpl.text)}
+              >
+                {tpl.label}
+              </button>
+            ))}
+          </div>
           <textarea
             className="chordpro-textarea"
             rows={5}

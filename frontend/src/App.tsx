@@ -21,6 +21,8 @@ import {
   parseChordProClient,
   saveLocalCustomSong,
 } from './music/clientStudio';
+import { analyzeAudioInBrowser } from './music/browserAudioAnalyzer';
+import { matchPresetByTitle, PRESET_SONGS } from './music/presetSongs';
 import { ChordDiagram } from './components/ChordDiagram';
 import { Fretboard } from './components/Fretboard';
 import { StrummingStrip } from './components/StrummingStrip';
@@ -70,10 +72,13 @@ export function App() {
         if (!resp.ok) throw new Error('API server indisponibil');
         const data = (await resp.json()) as { songs: SongProject[] };
         const local = loadLocalCustomSongs();
-        const merged = [...local.filter((l) => !data.songs.some((s) => s.id === l.id)), ...data.songs];
-        setSongs(merged);
-        if (merged.length > 0) {
-          selectSong(merged[0]);
+        const combined = [...local, ...data.songs, ...PRESET_SONGS];
+        const deduped = combined.filter(
+          (item, idx, arr) => arr.findIndex((other) => other.id === item.id) === idx
+        );
+        setSongs(deduped);
+        if (deduped.length > 0) {
+          selectSong(deduped[0]);
         }
       } catch {
         // Vercel static deployment or backend offline: use bundled presets + localStorage
@@ -271,7 +276,49 @@ export function App() {
         };
       }
     } catch {
-      // Fallback for static Vercel hosting
+      // Fallback handled below
+    }
+
+    // Direct CORS oEmbed fallback via noembed.com if serverless / backend returned generic title
+    if (meta.title.startsWith('Videoclip YouTube (')) {
+      try {
+        const noembedRes = await fetch(
+          `https://noembed.com/embed?url=${encodeURIComponent(meta.youtubeUrl)}`
+        );
+        if (noembedRes.ok) {
+          const ne = await noembedRes.json();
+          if (ne.title) meta.title = ne.title;
+          if (ne.author_name) meta.artist = ne.author_name;
+        }
+      } catch {
+        // Ignore if offline
+      }
+    }
+
+    // Smart title match against curated guitar catalog (keeps the user's YouTube video!)
+    const matchedPreset = matchPresetByTitle(meta.title);
+    if (matchedPreset) {
+      const adapted: SongProject = {
+        ...matchedPreset,
+        id: `yt-${ytId}`,
+        title: meta.title,
+        artist: meta.artist,
+        youtubeId: ytId,
+        youtubeUrl: meta.youtubeUrl,
+        isPreset: false,
+      };
+      setActiveSong(adapted);
+      setPlaybackMode('youtube');
+      setCurrentTime(0);
+      setIsPlaying(false);
+      setTransposeSemitones(adapted.capo ? -adapted.capo : 0);
+      setSyncOffset(0);
+      setLoopRange({ a: null, b: null });
+      setStatusBanner({
+        type: 'success',
+        text: `Am recunoscut piesa „${matchedPreset.title}” și am sincronizat acordurile (${adapted.bpm} BPM, ${adapted.timeSignature}). Folosește slider-ul Sync dacă videoclipul are intro.`,
+      });
+      return;
     }
 
     let starterSong: SongProject;
@@ -306,15 +353,15 @@ export function App() {
     starterSong.youtubeId = ytId;
     starterSong.youtubeUrl = meta.youtubeUrl;
     starterSong.strummingHint =
-      'Videoclip încărcat! Poți exersa imediat acordurile sincronizate sau edita progresia în ChordPro.';
+      'Video încărcat! Pentru detecție automată a acordurilor, încarcă un fișier MP3/WAV (analiza rulează direct în browser) sau alege o progresie din editorul ChordPro.';
 
     setActiveSong(starterSong);
     setPlaybackMode('youtube');
     setCurrentTime(0);
     setIsPlaying(false);
     setStatusBanner({
-      type: 'success',
-      text: `Video încărcat: „${meta.title}”. Poți începe să cânți imediat!`,
+      type: 'info',
+      text: `Video încărcat: „${meta.title}”. Încarcă un fișier MP3/WAV pentru analiză automată AI sau editează acordurile în ChordPro.`,
     });
   };
 
@@ -329,25 +376,36 @@ export function App() {
     setLocalAudioUrl(objectUrl);
 
     try {
-      const form = new FormData();
-      form.append('file', file);
-      if (activeSong?.title && !activeSong.isPreset) {
-        form.append('title', activeSong.title);
-      }
-      if (activeSong?.youtubeUrl) {
-        form.append('youtube_url', activeSong.youtubeUrl);
+      let analyzed: SongProject | null = null;
+      const customTitle = activeSong?.title && !activeSong.isPreset ? activeSong.title : undefined;
+
+      // Try local Python backend first if available; on Vercel, fall back seamlessly to browser DSP
+      try {
+        const form = new FormData();
+        form.append('file', file);
+        if (customTitle) form.append('title', customTitle);
+        if (activeSong?.youtubeUrl) form.append('youtube_url', activeSong.youtubeUrl);
+
+        const resp = await fetch('/api/analyze-audio', {
+          method: 'POST',
+          body: form,
+        });
+        if (resp.ok) {
+          analyzed = (await resp.json()) as SongProject;
+        }
+      } catch {
+        // Expected on static Vercel deployment
       }
 
-      const resp = await fetch('/api/analyze-audio', {
-        method: 'POST',
-        body: form,
-      });
-      const analyzed = await resp.json();
-      if (!resp.ok) {
-        throw new Error(analyzed.detail || 'Analiza audio a eșuat.');
+      if (!analyzed) {
+        analyzed = await analyzeAudioInBrowser(file, customTitle);
+        if (activeSong?.youtubeId) {
+          analyzed.youtubeId = activeSong.youtubeId;
+          analyzed.youtubeUrl = activeSong.youtubeUrl;
+        }
       }
 
-      setActiveSong(analyzed as SongProject);
+      setActiveSong(analyzed);
       setPlaybackMode('local-audio');
       setCurrentTime(0);
       setIsPlaying(false);
@@ -364,7 +422,7 @@ export function App() {
         text:
           err instanceof Error
             ? err.message
-            : 'Nu s-a putut analiza fișierul audio (analiza DSP avansată necesită backend-ul Python activ).',
+            : 'Nu s-a putut decoda acest fișier audio în browser. Încearcă format MP3, WAV, M4A sau OGG.',
       });
     } finally {
       setIsAnalyzing(false);
