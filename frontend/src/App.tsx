@@ -7,11 +7,12 @@ import {
   RotateCcw,
   SlidersHorizontal,
   Sparkles,
+  Volume2,
   X,
 } from 'lucide-react';
 import type { ChordEvent, PlaybackMode, SongProject, StrumSymbol } from './types';
 import { transposeChord } from './music/chords';
-import { audioEngine } from './music/audioEngine';
+import { audioEngine, type AuditionStyle, type GuitarTone } from './music/audioEngine';
 import {
   deleteLocalCustomSong,
   extractYouTubeId,
@@ -60,9 +61,23 @@ export function App() {
 
   const [metronomeEnabled, setMetronomeEnabled] = useState(false);
   const [synthEnabled, setSynthEnabled] = useState(false);
+  const [guitarTone, setGuitarTone] = useState<GuitarTone>('acoustic');
+  const [auditionStyle, setAuditionStyle] = useState<AuditionStyle>('D');
+  const [previewChordOverride, setPreviewChordOverride] = useState<string | null>(null);
 
   const lastSlotRef = useRef<number>(-1);
   const lastFrameTimeRef = useRef<number>(0);
+
+  useEffect(() => {
+    audioEngine.setTone(guitarTone);
+  }, [guitarTone]);
+
+  useEffect(() => {
+    if (isPlaying) {
+      setPreviewChordOverride(null);
+      audioEngine.stopGrooveSimulation();
+    }
+  }, [isPlaying]);
 
   // Load initial library (from FastAPI if available, or localStorage & bundled presets on Vercel)
   useEffect(() => {
@@ -94,6 +109,8 @@ export function App() {
   const selectSong = useCallback((song: SongProject) => {
     setIsPlaying(false);
     setActiveSong(song);
+    setPreviewChordOverride(null);
+    audioEngine.stopGrooveSimulation();
     setCurrentTime(0);
     setSeekRequest({ time: 0, nonce: Date.now() });
     setYoutubeInput(song.youtubeUrl || '');
@@ -768,64 +785,183 @@ export function App() {
 
             {/* Live Chord Coach Spotlight */}
             <aside className="chord-spotlight-panel">
-              <div className="spotlight-top">
-                <div>
-                  <span className="section-eyebrow">Acord Activ Acum</span>
-                  <div className="spotlight-countdown">
-                    {isPlaying ? `Următorul în ${beatsRemaining} timpi` : 'Click pe diagramă pentru a asculta'}
-                  </div>
-                </div>
-                {activeChordEvent?.section && (
-                  <span className="active-section-tag">{activeChordEvent.section}</span>
-                )}
-              </div>
+              {(() => {
+                const activeCapo = transposeSemitones < 0 ? Math.abs(transposeSemitones) : 0;
+                const spotlightChord = !isPlaying && previewChordOverride ? previewChordOverride : displayActiveChord;
+                const isPreviewing = !isPlaying && Boolean(previewChordOverride);
 
-              <div className="spotlight-diagrams-row">
-                <ChordDiagram
-                  chordName={displayActiveChord}
-                  size="lg"
-                  highlight
-                  subtitle={
-                    transposeSemitones < 0 && activeChordEvent
-                      ? `ACUM · sună ${activeChordEvent.chord}`
-                      : 'ACUM'
-                  }
-                />
-
-                <div className="next-chords-column">
-                  <span className="next-up-label">Urmează</span>
-                  {nextChordEvents.length > 0 ? (
-                    <div className="next-chords-pair">
-                      {nextChordEvents.map((ev, i) => (
-                        <ChordDiagram
-                          key={`next-${i}-${ev.time}`}
-                          chordName={transposeChord(ev.chord, transposeSemitones)}
-                          size="sm"
-                          subtitle={`${ev.beats} timpi`}
-                        />
-                      ))}
+                return (
+                  <>
+                    <div className="spotlight-top">
+                      <div>
+                        <span className="section-eyebrow">
+                          {isPreviewing ? 'Pre-ascultare Acord Ales' : 'Acord Activ Acum'}
+                        </span>
+                        <div className="spotlight-countdown">
+                          {isPlaying
+                            ? `Următorul în ${beatsRemaining} timpi`
+                            : 'Alege un acord sau apasă 🔊 pentru a-l asculta la chitară'}
+                        </div>
+                      </div>
+                      <div className="spotlight-top-actions">
+                        {isPreviewing && (
+                          <button
+                            type="button"
+                            className="preview-reset-btn"
+                            onClick={() => setPreviewChordOverride(null)}
+                          >
+                            Înapoi la {displayActiveChord}
+                          </button>
+                        )}
+                        {activeChordEvent?.section && (
+                          <span className="active-section-tag">{activeChordEvent.section}</span>
+                        )}
+                      </div>
                     </div>
-                  ) : (
-                    <div className="next-empty-box">Finalul secțiunii</div>
-                  )}
-                </div>
-              </div>
 
-              <div className="song-chord-palette">
-                <span className="palette-label">Vocabularul piesei ({uniqueDisplayChords.length} acorduri):</span>
-                <div className="palette-pills">
-                  {uniqueDisplayChords.map((ch) => (
-                    <button
-                      key={ch}
-                      type="button"
-                      className={`palette-chord-pill ${ch === displayActiveChord ? 'is-active' : ''}`}
-                      onClick={() => audioEngine.strumChord(ch, 'D')}
-                    >
-                      {ch}
-                    </button>
-                  ))}
-                </div>
-              </div>
+                    <div className="spotlight-diagrams-row">
+                      <ChordDiagram
+                        chordName={spotlightChord}
+                        size="lg"
+                        highlight
+                        capo={activeCapo}
+                        auditionStyle={auditionStyle}
+                        strummingPattern={activeSong.strummingPattern}
+                        bpm={activeSong.bpm}
+                        timeSignature={activeSong.timeSignature}
+                        subtitle={
+                          isPreviewing
+                            ? 'SELECTAT'
+                            : activeCapo > 0 && activeChordEvent
+                            ? `ACUM · sună ${activeChordEvent.chord}`
+                            : 'ACUM'
+                        }
+                      />
+
+                      <div className="next-chords-column">
+                        <span className="next-up-label">Urmează</span>
+                        {nextChordEvents.length > 0 ? (
+                          <div className="next-chords-pair">
+                            {nextChordEvents.map((ev, i) => (
+                              <ChordDiagram
+                                key={`next-${i}-${ev.time}`}
+                                chordName={transposeChord(ev.chord, transposeSemitones)}
+                                size="sm"
+                                capo={activeCapo}
+                                auditionStyle={auditionStyle}
+                                strummingPattern={activeSong.strummingPattern}
+                                bpm={activeSong.bpm}
+                                timeSignature={activeSong.timeSignature}
+                                subtitle={`${ev.beats} timpi`}
+                              />
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="next-empty-box">Finalul secțiunii</div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="song-chord-palette">
+                      <div className="sim-controls-bar">
+                        <div className="sim-control-group">
+                          <span className="sim-label">Ton chitară:</span>
+                          <div className="sim-chip-group" role="group" aria-label="Ton chitară">
+                            {(
+                              [
+                                { id: 'acoustic', label: 'Acustică' },
+                                { id: 'nylon', label: 'Clasic Nylon' },
+                                { id: 'clean', label: 'Electric Clean' },
+                              ] as { id: GuitarTone; label: string }[]
+                            ).map((t) => (
+                              <button
+                                key={t.id}
+                                type="button"
+                                className={`sim-chip ${guitarTone === t.id ? 'is-active' : ''}`}
+                                onClick={() => setGuitarTone(t.id)}
+                              >
+                                {t.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="sim-control-group">
+                          <span className="sim-label">Stil redare 🔊:</span>
+                          <div className="sim-chip-group" role="group" aria-label="Stil redare acord">
+                            {(
+                              [
+                                { id: 'D', label: 'Jos ↓' },
+                                { id: 'U', label: 'Sus ↑' },
+                                { id: 'arp', label: 'Arpegiu' },
+                                { id: 'groove', label: 'Ritm 1 măsură' },
+                              ] as { id: AuditionStyle; label: string }[]
+                            ).map((s) => (
+                              <button
+                                key={s.id}
+                                type="button"
+                                className={`sim-chip ${auditionStyle === s.id ? 'is-active' : ''}`}
+                                onClick={() => setAuditionStyle(s.id)}
+                              >
+                                {s.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      <span className="palette-label">
+                        Vocabularul piesei ({uniqueDisplayChords.length} acorduri) — apasă 🔊 din dreptul oricărui acord:
+                      </span>
+                      <div className="palette-pills">
+                        {uniqueDisplayChords.map((ch) => {
+                          const isSelected = ch === spotlightChord;
+                          return (
+                            <div
+                              key={ch}
+                              className={`palette-chord-item ${isSelected ? 'is-active' : ''}`}
+                            >
+                              <button
+                                type="button"
+                                className="palette-chord-name"
+                                title={`Vezi diagrama ${ch} și ascultă`}
+                                onClick={() => {
+                                  if (!isPlaying) {
+                                    setPreviewChordOverride(ch === displayActiveChord ? null : ch);
+                                  }
+                                  audioEngine.auditionChord(ch, auditionStyle, {
+                                    pattern: activeSong.strummingPattern,
+                                    bpm: activeSong.bpm,
+                                    timeSignature: activeSong.timeSignature,
+                                    semitoneShift: activeCapo,
+                                  });
+                                }}
+                              >
+                                {ch}
+                              </button>
+                              <button
+                                type="button"
+                                className="palette-chord-listen"
+                                title={`Simulează acordul ${ch} (${auditionStyle === 'groove' ? 'Ritm 1 măsură' : auditionStyle === 'arp' ? 'Arpegiu' : auditionStyle === 'U' ? 'Strum Sus' : 'Strum Jos'})`}
+                                onClick={() =>
+                                  audioEngine.auditionChord(ch, auditionStyle, {
+                                    pattern: activeSong.strummingPattern,
+                                    bpm: activeSong.bpm,
+                                    timeSignature: activeSong.timeSignature,
+                                    semitoneShift: activeCapo,
+                                  })
+                                }
+                              >
+                                <Volume2 size={13} />
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
             </aside>
           </section>
 
@@ -835,7 +971,7 @@ export function App() {
             timeSignature={activeSong.timeSignature}
             bpm={activeSong.bpm}
             activeSlotIndex={isPlaying ? activeSlotInBar : -1}
-            activeChord={displayActiveChord}
+            activeChord={!isPlaying && previewChordOverride ? previewChordOverride : displayActiveChord}
             hint={activeSong.strummingHint}
             metronomeEnabled={metronomeEnabled}
             synthEnabled={synthEnabled}
@@ -849,7 +985,7 @@ export function App() {
 
           {/* Interactive 12-Fret Guitar Neck */}
           <Fretboard
-            chordName={displayActiveChord}
+            chordName={!isPlaying && previewChordOverride ? previewChordOverride : displayActiveChord}
             capo={transposeSemitones < 0 ? Math.abs(transposeSemitones) : 0}
           />
 
@@ -860,6 +996,10 @@ export function App() {
             activeChordIndex={activeChordIndex}
             currentTime={effectiveTime}
             transposeSemitones={transposeSemitones}
+            auditionStyle={auditionStyle}
+            strummingPattern={activeSong.strummingPattern}
+            bpm={activeSong.bpm}
+            timeSignature={activeSong.timeSignature}
             loopRange={loopRange}
             chordProDraft={
               activeSong.chordPro ||

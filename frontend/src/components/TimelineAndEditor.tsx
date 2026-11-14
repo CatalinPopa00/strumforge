@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Edit3, FileText, Plus, Repeat, Save, Trash2 } from 'lucide-react';
-import type { ChordEvent, SongSection } from '../types';
+import { Edit3, FileText, Plus, Repeat, Save, Trash2, Volume2 } from 'lucide-react';
+import type { ChordEvent, SongSection, StrumSymbol } from '../types';
 import { transposeChord } from '../music/chords';
+import { audioEngine, type AuditionStyle } from '../music/audioEngine';
 
 interface TimelineAndEditorProps {
   chords: ChordEvent[];
@@ -9,6 +10,10 @@ interface TimelineAndEditorProps {
   activeChordIndex: number;
   currentTime: number;
   transposeSemitones: number;
+  auditionStyle: AuditionStyle;
+  strummingPattern: StrumSymbol[];
+  bpm: number;
+  timeSignature: string;
   loopRange: { a: number | null; b: number | null };
   chordProDraft: string;
   onSeekTo: (time: number) => void;
@@ -35,6 +40,10 @@ export const TimelineAndEditor: React.FC<TimelineAndEditorProps> = ({
   activeChordIndex,
   currentTime,
   transposeSemitones,
+  auditionStyle,
+  strummingPattern,
+  bpm,
+  timeSignature,
   loopRange,
   chordProDraft,
   onSeekTo,
@@ -236,6 +245,21 @@ export const TimelineAndEditor: React.FC<TimelineAndEditorProps> = ({
                 </div>
               ) : (
                 <div className="chord-block-loop-bar">
+                  <button
+                    type="button"
+                    title={`Simulează cum sună ${displayChord}`}
+                    className="chord-block-listen-btn"
+                    onClick={() =>
+                      audioEngine.auditionChord(displayChord, auditionStyle, {
+                        pattern: strummingPattern,
+                        bpm,
+                        timeSignature,
+                        semitoneShift: transposeSemitones < 0 ? Math.abs(transposeSemitones) : 0,
+                      })
+                    }
+                  >
+                    <Volume2 size={12} />
+                  </button>
                   <button
                     type="button"
                     title="Setează început Loop A"

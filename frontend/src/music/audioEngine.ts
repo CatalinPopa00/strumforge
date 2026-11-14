@@ -1,8 +1,23 @@
 import { getChordMidiNotes, midiToHz } from './chords';
+import type { StrumSymbol } from '../types';
+
+export type GuitarTone = 'acoustic' | 'nylon' | 'clean';
+export type AuditionStyle = 'D' | 'U' | 'arp' | 'groove';
 
 class StudioAudioEngine {
   private ctx: AudioContext | null = null;
   private noiseBuffer: AudioBuffer | null = null;
+  private stringCache = new Map<string, AudioBuffer>();
+  private grooveTimers: number[] = [];
+  private tone: GuitarTone = 'acoustic';
+
+  public setTone(tone: GuitarTone): void {
+    this.tone = tone;
+  }
+
+  public getTone(): GuitarTone {
+    return this.tone;
+  }
 
   private ensureContext(): AudioContext {
     if (!this.ctx) {
@@ -23,45 +38,93 @@ class StudioAudioEngine {
     return this.ctx;
   }
 
-  public pluckMidi(midi: number, when = 0, duration = 1.25, gainLevel = 0.14): void {
+  /** Synthesize a physical Karplus-Strong plucked guitar string buffer for a given MIDI note & tone. */
+  private getKarplusStrongBuffer(midi: number, durationSec = 2.0): AudioBuffer {
     const ctx = this.ensureContext();
-    const startTime = when > 0 ? when : ctx.currentTime;
+    const cacheKey = `${this.tone}:${midi}`;
+    const cached = this.stringCache.get(cacheKey);
+    if (cached) return cached;
+
+    const sr = ctx.sampleRate;
+    const totalSamples = Math.floor(sr * durationSec);
     const freq = midiToHz(midi);
+    const periodFloat = sr / freq;
+    const delayLen = Math.max(2, Math.floor(periodFloat));
 
-    const osc1 = ctx.createOscillator();
-    const osc2 = ctx.createOscillator();
-    osc1.type = 'triangle';
-    osc2.type = 'sawtooth';
-    osc1.frequency.setValueAtTime(freq, startTime);
-    osc2.frequency.setValueAtTime(freq * 1.0018, startTime);
+    const buf = ctx.createBuffer(1, totalSamples, sr);
+    const out = buf.getChannelData(0);
 
-    const filter = ctx.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.setValueAtTime(Math.min(4800, freq * 8.5), startTime);
-    filter.frequency.exponentialRampToValueAtTime(Math.max(320, freq * 1.8), startTime + duration * 0.7);
-    filter.Q.value = 1.2;
+    // Tone parameters
+    const brightness = this.tone === 'acoustic' ? 0.496 : this.tone === 'clean' ? 0.498 : 0.475;
+    const decay = this.tone === 'nylon' ? 0.9925 : this.tone === 'clean' ? 0.9968 : 0.9955;
+    const pickPos = this.tone === 'nylon' ? 0.28 : 0.18;
 
-    const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.0001, startTime);
-    gain.gain.linearRampToValueAtTime(gainLevel, startTime + 0.008);
-    gain.gain.exponentialRampToValueAtTime(0.0008, startTime + duration);
+    // Initial string excitation (filtered white noise + soft fundamental impulse for warm body)
+    const ring = new Float32Array(delayLen);
+    let lp = 0;
+    const lpAlpha = this.tone === 'nylon' ? 0.28 : this.tone === 'clean' ? 0.55 : 0.48;
+    for (let i = 0; i < delayLen; i++) {
+      const rawNoise = Math.random() * 2 - 1;
+      lp = lp + lpAlpha * (rawNoise - lp);
+      const comb = Math.sin((Math.PI * i) / Math.max(2, delayLen * pickPos));
+      ring[i] = lp * 0.72 + 0.28 * comb * Math.sin((2 * Math.PI * i) / delayLen);
+    }
 
-    const osc2Gain = ctx.createGain();
-    osc2Gain.gain.value = 0.28;
+    let idx = 0;
+    let prev = ring[delayLen - 1];
+    for (let n = 0; n < totalSamples; n++) {
+      const cur = ring[idx];
+      out[n] = cur;
 
-    osc1.connect(filter);
-    osc2.connect(osc2Gain);
-    osc2Gain.connect(filter);
-    filter.connect(gain);
-    gain.connect(ctx.destination);
+      // Two-point averaging lowpass + decay (Karplus-Strong loop)
+      const nextVal = decay * (brightness * cur + (1 - brightness) * prev);
+      ring[idx] = nextVal;
+      prev = cur;
+      idx = (idx + 1) % delayLen;
+    }
 
-    osc1.start(startTime);
-    osc2.start(startTime);
-    osc1.stop(startTime + duration + 0.05);
-    osc2.stop(startTime + duration + 0.05);
+    // Gentle fade out at the tail
+    const tailSamples = Math.min(totalSamples, Math.floor(sr * 0.08));
+    for (let i = 0; i < tailSamples; i++) {
+      out[totalSamples - 1 - i] *= i / tailSamples;
+    }
+
+    if (this.stringCache.size > 160) {
+      this.stringCache.clear();
+    }
+    this.stringCache.set(cacheKey, buf);
+    return buf;
   }
 
-  public playChuck(when = 0, gainLevel = 0.14): void {
+  public pluckMidi(midi: number, when = 0, duration = 1.65, gainLevel = 0.28): void {
+    const ctx = this.ensureContext();
+    const startTime = when > 0 ? when : ctx.currentTime;
+    const buf = this.getKarplusStrongBuffer(midi, Math.max(1.6, duration));
+
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+
+    // Acoustic body warmth (slight resonant peak around 120Hz + smooth high rolloff)
+    const body = ctx.createBiquadFilter();
+    body.type = 'peaking';
+    body.frequency.setValueAtTime(this.tone === 'nylon' ? 105 : 128, startTime);
+    body.Q.value = 1.4;
+    body.gain.value = this.tone === 'clean' ? 1.5 : 4.0;
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.001, startTime);
+    gain.gain.linearRampToValueAtTime(gainLevel, startTime + 0.005);
+    gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+
+    src.connect(body);
+    body.connect(gain);
+    gain.connect(ctx.destination);
+
+    src.start(startTime);
+    src.stop(startTime + duration + 0.04);
+  }
+
+  public playChuck(when = 0, gainLevel = 0.16): void {
     const ctx = this.ensureContext();
     if (!this.noiseBuffer) return;
     const startTime = when > 0 ? when : ctx.currentTime;
@@ -84,23 +147,83 @@ class StudioAudioEngine {
     src.start(startTime);
   }
 
-  public strumChord(chordName: string, direction: 'D' | 'U' | 'x' = 'D', gainScale = 1.0): void {
+  public stopGrooveSimulation(): void {
+    for (const id of this.grooveTimers) {
+      window.clearTimeout(id);
+    }
+    this.grooveTimers = [];
+  }
+
+  public strumChord(
+    chordName: string,
+    direction: 'D' | 'U' | 'x' | 'arp' = 'D',
+    gainScale = 1.0,
+    semitoneShift = 0
+  ): void {
     const ctx = this.ensureContext();
     if (direction === 'x') {
-      this.playChuck(ctx.currentTime, 0.16 * gainScale);
+      this.playChuck(ctx.currentTime, 0.18 * gainScale);
       return;
     }
 
-    const notes = getChordMidiNotes(chordName);
+    const notes = getChordMidiNotes(chordName).map((m) => m + semitoneShift);
     if (!notes.length) return;
     const ordered = direction === 'U' ? [...notes].reverse() : notes;
     const now = ctx.currentTime;
-    const delayStep = direction === 'U' ? 0.015 : 0.022;
-    const noteGain = (direction === 'U' ? 0.09 : 0.11) * gainScale;
+
+    const delayStep = direction === 'arp' ? 0.13 : direction === 'U' ? 0.016 : 0.024;
+    const duration = direction === 'arp' ? 1.85 : 1.55;
+    const noteGain = (direction === 'U' ? 0.2 : direction === 'arp' ? 0.26 : 0.23) * gainScale;
 
     ordered.forEach((midi, idx) => {
-      this.pluckMidi(midi, now + idx * delayStep, 1.35, noteGain);
+      this.pluckMidi(midi, now + idx * delayStep, duration, noteGain);
     });
+  }
+
+  /** Simulate 1 full measure of a chord using the song's exact strumming pattern & BPM. */
+  public simulateChordGroove(
+    chordName: string,
+    pattern: StrumSymbol[],
+    bpm: number,
+    timeSignature: string,
+    semitoneShift = 0
+  ): void {
+    this.stopGrooveSimulation();
+    const beatMs = (60 / Math.max(45, bpm)) * 1000;
+    const slotMs = timeSignature === '6/8' ? beatMs : beatMs / 2;
+
+    pattern.forEach((sym, idx) => {
+      if (sym === '-') return;
+      const timerId = window.setTimeout(() => {
+        this.strumChord(chordName, sym, 0.95, semitoneShift);
+      }, idx * slotMs);
+      this.grooveTimers.push(timerId);
+    });
+  }
+
+  public auditionChord(
+    chordName: string,
+    style: AuditionStyle,
+    options?: {
+      pattern?: StrumSymbol[];
+      bpm?: number;
+      timeSignature?: string;
+      semitoneShift?: number;
+    }
+  ): void {
+    const shift = options?.semitoneShift ?? 0;
+    if (style === 'groove' && options?.pattern) {
+      this.simulateChordGroove(
+        chordName,
+        options.pattern,
+        options.bpm ?? 96,
+        options.timeSignature ?? '4/4',
+        shift
+      );
+      return;
+    }
+    this.stopGrooveSimulation();
+    this.strumChord(chordName, style === 'groove' ? 'D' : style, 1.0, shift);
   }
 
   public playMetronomeClick(accent: boolean, volume = 0.4): void {

@@ -1,13 +1,19 @@
 import React from 'react';
-import { Volume2 } from 'lucide-react';
-import { getChordVoicing } from '../music/chords';
-import { audioEngine } from '../music/audioEngine';
+import { ArrowDown, ArrowUp, Music, Play, Volume2 } from 'lucide-react';
+import { STANDARD_TUNING_MIDI, getChordVoicing } from '../music/chords';
+import { audioEngine, type AuditionStyle } from '../music/audioEngine';
+import type { StrumSymbol } from '../types';
 
 interface ChordDiagramProps {
   chordName: string;
   size?: 'sm' | 'lg';
   highlight?: boolean;
   subtitle?: string;
+  capo?: number;
+  auditionStyle?: AuditionStyle;
+  strummingPattern?: StrumSymbol[];
+  bpm?: number;
+  timeSignature?: string;
 }
 
 export const ChordDiagram: React.FC<ChordDiagramProps> = ({
@@ -15,14 +21,19 @@ export const ChordDiagram: React.FC<ChordDiagramProps> = ({
   size = 'lg',
   highlight = false,
   subtitle,
+  capo = 0,
+  auditionStyle = 'D',
+  strummingPattern,
+  bpm,
+  timeSignature,
 }) => {
   const voicing = getChordVoicing(chordName);
   const fretCount = 4;
-  const width = size === 'lg' ? 168 : 112;
-  const height = size === 'lg' ? 196 : 132;
-  const padX = size === 'lg' ? 28 : 20;
+  const width = size === 'lg' ? 176 : 116;
+  const height = size === 'lg' ? 198 : 134;
+  const padX = size === 'lg' ? 30 : 20;
   const padTop = size === 'lg' ? 32 : 24;
-  const padBottom = size === 'lg' ? 22 : 16;
+  const padBottom = size === 'lg' ? 20 : 14;
 
   const gridW = width - padX * 2;
   const gridH = height - padTop - padBottom;
@@ -32,11 +43,17 @@ export const ChordDiagram: React.FC<ChordDiagramProps> = ({
   const showNut = voicing.baseFret <= 1;
   const startFret = showNut ? 1 : voicing.baseFret;
 
+  const playWithStyle = (style: AuditionStyle) => {
+    audioEngine.auditionChord(chordName, style, {
+      pattern: strummingPattern,
+      bpm,
+      timeSignature,
+      semitoneShift: capo,
+    });
+  };
+
   return (
-    <button
-      type="button"
-      onClick={() => audioEngine.strumChord(chordName, 'D')}
-      title={`Ascultă acordul ${chordName}`}
+    <div
       className={`chord-diagram-card ${size === 'sm' ? 'chord-diagram-sm' : 'chord-diagram-lg'} ${
         highlight ? 'is-highlighted' : ''
       }`}
@@ -46,7 +63,14 @@ export const ChordDiagram: React.FC<ChordDiagramProps> = ({
           <span className="chord-diagram-name">{chordName}</span>
           {subtitle && <span className="chord-diagram-subtitle">{subtitle}</span>}
         </div>
-        <Volume2 className="chord-sound-icon" size={size === 'lg' ? 15 : 12} />
+        <button
+          type="button"
+          className="chord-quick-listen-btn"
+          title={`Ascultă acordul ${chordName}`}
+          onClick={() => playWithStyle(auditionStyle)}
+        >
+          <Volume2 size={size === 'lg' ? 15 : 13} />
+        </button>
       </div>
 
       <svg
@@ -95,20 +119,45 @@ export const ChordDiagram: React.FC<ChordDiagramProps> = ({
           );
         })}
 
-        {/* Vertical strings */}
+        {/* Vertical strings (clickable individually!) */}
         {Array.from({ length: 6 }).map((_, sIdx) => {
           const x = padX + sIdx * stringSpacing;
           const thickness = 2.0 - sIdx * 0.22;
+          const fret = voicing.frets[sIdx];
+          const isPlayable = fret >= 0;
           return (
-            <line
+            <g
               key={`s-${sIdx}`}
-              x1={x}
-              y1={padTop}
-              x2={x}
-              y2={padTop + gridH}
-              stroke="rgba(243, 237, 226, 0.45)"
-              strokeWidth={thickness}
-            />
+              className={isPlayable ? 'chord-string-clickable' : undefined}
+              onClick={() => {
+                if (isPlayable) {
+                  audioEngine.pluckMidi(STANDARD_TUNING_MIDI[sIdx] + fret + capo);
+                }
+              }}
+            >
+              <line
+                x1={x}
+                y1={padTop}
+                x2={x}
+                y2={padTop + gridH}
+                stroke="rgba(243, 237, 226, 0.45)"
+                strokeWidth={thickness}
+              />
+              {/* Invisible wider hit target for individual string audition */}
+              <rect
+                x={x - stringSpacing * 0.42}
+                y={padTop - 8}
+                width={stringSpacing * 0.84}
+                height={gridH + 16}
+                fill="transparent"
+              >
+                <title>
+                  {isPlayable
+                    ? `Click pentru a ciupi coarda ${sIdx + 1} (tasta ${fret})`
+                    : `Coarda ${sIdx + 1} este mutată (×)`}
+                </title>
+              </rect>
+            </g>
           );
         })}
 
@@ -128,6 +177,7 @@ export const ChordDiagram: React.FC<ChordDiagramProps> = ({
             height={size === 'lg' ? 16 : 11}
             rx={size === 'lg' ? 8 : 5.5}
             fill="rgba(224, 142, 69, 0.88)"
+            pointerEvents="none"
           />
         )}
 
@@ -142,6 +192,7 @@ export const ChordDiagram: React.FC<ChordDiagramProps> = ({
                 y={padTop - 10}
                 textAnchor="middle"
                 className="chord-muted-mark"
+                pointerEvents="none"
               >
                 ×
               </text>
@@ -157,6 +208,7 @@ export const ChordDiagram: React.FC<ChordDiagramProps> = ({
                 fill="none"
                 stroke="#d9c6a5"
                 strokeWidth={1.6}
+                pointerEvents="none"
               />
             );
           }
@@ -168,7 +220,7 @@ export const ChordDiagram: React.FC<ChordDiagramProps> = ({
           const r = size === 'lg' ? 8.5 : 6;
 
           return (
-            <g key={`d-${sIdx}`}>
+            <g key={`d-${sIdx}`} pointerEvents="none">
               <circle cx={x} cy={y} r={r} fill="#e08e45" stroke="#18120e" strokeWidth={1.5} />
               {finger > 0 && (
                 <text
@@ -184,6 +236,40 @@ export const ChordDiagram: React.FC<ChordDiagramProps> = ({
           );
         })}
       </svg>
-    </button>
+
+      {/* Per-chord simulation controls right inside the card */}
+      <div className="chord-audition-strip">
+        <button
+          type="button"
+          title="Strum în jos (↓)"
+          onClick={() => playWithStyle('D')}
+        >
+          <ArrowDown size={12} /> {size === 'lg' ? 'Jos' : ''}
+        </button>
+        <button
+          type="button"
+          title="Strum în sus (↑)"
+          onClick={() => playWithStyle('U')}
+        >
+          <ArrowUp size={12} /> {size === 'lg' ? 'Sus' : ''}
+        </button>
+        <button
+          type="button"
+          title="Arpegiu coardă cu coardă"
+          onClick={() => playWithStyle('arp')}
+        >
+          <Music size={11} /> Arp
+        </button>
+        {size === 'lg' && strummingPattern && (
+          <button
+            type="button"
+            title="Simulează o măsură pe ritmul piesei"
+            onClick={() => playWithStyle('groove')}
+          >
+            <Play size={11} /> Ritm
+          </button>
+        )}
+      </div>
+    </div>
   );
 };
