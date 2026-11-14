@@ -7,7 +7,6 @@ import {
   RotateCcw,
   SlidersHorizontal,
   Sparkles,
-  Trash2,
   X,
 } from 'lucide-react';
 import type { ChordEvent, PlaybackMode, SongProject, StrumSymbol } from './types';
@@ -25,6 +24,7 @@ import { analyzeAudioInBrowser } from './music/browserAudioAnalyzer';
 import { matchPresetByTitle, PRESET_SONGS } from './music/presetSongs';
 import { ChordDiagram } from './components/ChordDiagram';
 import { Fretboard } from './components/Fretboard';
+import { SongCatalog } from './components/SongCatalog';
 import { StrummingStrip } from './components/StrummingStrip';
 import { YouTubeStage } from './components/YouTubeStage';
 import { TimelineAndEditor } from './components/TimelineAndEditor';
@@ -624,39 +624,12 @@ export function App() {
         </form>
       </header>
 
-      {/* Library Bar */}
-      <section className="library-strip" aria-label="Bibliotecă piese">
-        <span className="library-label">Piese gata de cântat:</span>
-        <div className="library-chips">
-          {songs.map((song) => {
-            const isSelected = activeSong?.id === song.id;
-            return (
-              <div key={song.id} className={`library-chip-wrap ${isSelected ? 'is-selected' : ''}`}>
-                <button
-                  type="button"
-                  className="library-chip"
-                  onClick={() => selectSong(song)}
-                >
-                  <span className="chip-title">{song.title}</span>
-                  <span className="chip-meta">
-                    {song.bpm} BPM · {song.timeSignature}
-                  </span>
-                </button>
-                {!song.isPreset && (
-                  <button
-                    type="button"
-                    className="chip-delete"
-                    title="Șterge piesa salvată"
-                    onClick={() => void handleDeleteSong(song.id)}
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </section>
+      <SongCatalog
+        songs={songs}
+        activeSongId={activeSong?.id ?? null}
+        onSelectSong={selectSong}
+        onDeleteSong={(id) => void handleDeleteSong(id)}
+      />
 
       {statusBanner && (
         <div className={`status-banner is-${statusBanner.type}`}>

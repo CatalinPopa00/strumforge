@@ -29,7 +29,9 @@ export interface SongProject {
   timeSignature: '4/4' | '3/4' | '6/8' | string;
   key: string;
   capo: number;
-  difficulty: string;
+  difficulty: 'Începător' | 'Mediu' | 'Avansat' | string;
+  category?: string;
+  techniqueFocus?: string;
   duration: number;
   strummingPattern: StrumSymbol[];
   strummingHint?: string;
